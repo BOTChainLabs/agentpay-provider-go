@@ -46,8 +46,8 @@ github.com/tklauser/go-sysconf v0.3.12 h1:0QaGUFOdQaIVdPgfITYzaTegZvdCjmYO52cSFA
 github.com/tklauser/go-sysconf v0.3.12/go.mod h1:Ho14jnntGE1fpdOqQEEaiKRpvIavV0hSfmBq8nJbHYI=
 github.com/tklauser/numcpus v0.6.1 h1:ng9scYS7az0Bk4OZLvrNXNSAO2Pxr1XXRAPyjhIx+Fk=
 github.com/tklauser/numcpus v0.6.1/go.mod h1:1XfjsgE2zo8GVw7POkMbHENHzVg3GzmoZ9fESEdAacY=
-github.com/x402-foundation/x402/go/v2 v2.27.0 h1:Jz6R/eLThWB2EKofTX0Sj6cRCTt6BuLEc6E1QwO5EUY=
-github.com/x402-foundation/x402/go/v2 v2.27.0/go.mod h1:KJZBIAosfnCzZGISFJVxTXKS5N2osJgDppD3Zmsnc4A=
+github.com/x402-foundation/x402/go/v2 v2.28.0 h1:r+ixdwJEZKiM6hT4wRRc++2i+y5w4tBG6MR0LjcNVOs=
+github.com/x402-foundation/x402/go/v2 v2.28.0/go.mod h1:KJZBIAosfnCzZGISFJVxTXKS5N2osJgDppD3Zmsnc4A=
 github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f h1:J9EGpcZtP0E/raorCMxlFGSTBrsSlaDGf3jU/qvAE2c=
 github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f/go.mod h1:N2zxlSyiKSe5eX1tZViRH5QA0qijqEDrYZiPEAiq3wU=
 github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 h1:EzJWgHovont7NscjpAxXsDA8S8BMYve8Y5+7cuRE7R0=
