@@ -31,8 +31,9 @@ type PaymentOrchestrationResult struct {
 }
 
 // Settle 处理一份已由 B5.1 解析过的 PAYMENT-SIGNATURE。调用方只能在返回
-// SettlementConfirmed 后进入 B6 StartFulfillment；SettlementPending 与没有
-// lease 的情况都必须停止在此处，不能调用业务 Handler。
+// SettlementConfirmed 后进入 B6 StartFulfillment。没有 lease 的 PREPARED /
+// SETTLING 订单必须停止；已 PAID 的订单则读取已确认的结算事实后进入履约，绝不
+// 再次申请 lease 或调用 :settle。
 func (o PaymentOrchestrator) Settle(ctx context.Context, request *http.Request, retry PaymentRetry) (PaymentOrchestrationResult, error) {
 	if o.Configs == nil || o.Orders == nil || request == nil || strings.TrimSpace(retry.RawHeader) == "" {
 		return PaymentOrchestrationResult{}, ErrPaymentOrderClientInvalid
@@ -70,8 +71,25 @@ func (o PaymentOrchestrator) Settle(ctx context.Context, request *http.Request, 
 	}
 	result := PaymentOrchestrationResult{Order: prepared, State: SettlementPending, RequestBinding: binding}
 	if !prepared.SettlementLeaseAcquired {
-		// 另一个实例可能正在广播或等待确认。此分支宁可要求调用方稍后重试，
-		// 也不能绕过 lease 再发一次结算，或提前把请求交给业务服务。
+		if prepared.PaymentStatus != "PAID" {
+			// 另一个实例可能正在广播或等待确认。此分支宁可要求调用方稍后重试，
+			// 也不能绕过 lease 再发一次结算，或提前把请求交给业务服务。
+			return result, nil
+		}
+		reader, ok := o.Orders.(ConfirmedSettlementReader)
+		if !ok {
+			return PaymentOrchestrationResult{}, ErrPaymentOrderClientInvalid
+		}
+		settlement, err := reader.LoadConfirmedSettlement(ctx, prepared.PaymentOrderID)
+		if err != nil {
+			return PaymentOrchestrationResult{}, err
+		}
+		if settlement.State != SettlementConfirmed || settlement.PaymentOrderID != prepared.PaymentOrderID ||
+			settlement.PaymentStatus != "PAID" || settlement.CollectionStatus != "CONFIRMED" ||
+			strings.TrimSpace(settlement.PaymentResponse) == "" {
+			return PaymentOrchestrationResult{}, ErrPaymentOrderClientInvalid
+		}
+		result.State, result.Settlement = SettlementConfirmed, settlement
 		return result, nil
 	}
 	settlement, err := o.Orders.Settle(ctx, SettlePaymentOrderInput{

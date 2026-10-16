@@ -18,12 +18,15 @@ func (f runtimeConfigLoaderFunc) LoadRuntimeConfig(ctx context.Context) (Runtime
 }
 
 type fakePaymentOrderClient struct {
-	prepared     PreparedPaymentOrder
-	settlement   SettlementResult
-	prepareInput PreparePaymentOrderInput
-	settleInput  SettlePaymentOrderInput
-	prepareCalls int
-	settleCalls  int
+	prepared       PreparedPaymentOrder
+	settlement     SettlementResult
+	confirmed      SettlementResult
+	confirmedErr   error
+	prepareInput   PreparePaymentOrderInput
+	settleInput    SettlePaymentOrderInput
+	prepareCalls   int
+	settleCalls    int
+	confirmedCalls int
 }
 
 func (f *fakePaymentOrderClient) Prepare(_ context.Context, input PreparePaymentOrderInput) (PreparedPaymentOrder, error) {
@@ -36,6 +39,17 @@ func (f *fakePaymentOrderClient) Settle(_ context.Context, input SettlePaymentOr
 	f.settleCalls++
 	f.settleInput = input
 	return f.settlement, nil
+}
+
+func (f *fakePaymentOrderClient) LoadConfirmedSettlement(_ context.Context, paymentOrderID string) (SettlementResult, error) {
+	f.confirmedCalls++
+	if f.confirmedErr != nil {
+		return SettlementResult{}, f.confirmedErr
+	}
+	if paymentOrderID != f.prepared.PaymentOrderID {
+		return SettlementResult{}, ErrPaymentOrderClientInvalid
+	}
+	return f.confirmed, nil
 }
 
 func TestPaymentOrchestratorUsesFrozenConfigAndRestoresBusinessRequest(t *testing.T) {
@@ -75,6 +89,21 @@ func TestPaymentOrchestratorDoesNotSettleWithoutLease(t *testing.T) {
 	result, err := orchestrator.Settle(context.Background(), httptest.NewRequest(http.MethodGet, "https://provider.example/research", nil), testPaymentRetry())
 	if err != nil || result.State != SettlementPending || orders.prepareCalls != 1 || orders.settleCalls != 0 {
 		t.Fatalf("result=%+v prepare=%d settle=%d err=%v", result, orders.prepareCalls, orders.settleCalls, err)
+	}
+}
+
+func TestPaymentOrchestratorUsesConfirmedOrderWithoutReopeningSettlement(t *testing.T) {
+	orders := &fakePaymentOrderClient{
+		prepared:  PreparedPaymentOrder{PaymentOrderID: "ord_1", ServiceID: "svc_1", ConfigVersion: 7, PaymentStatus: "PAID"},
+		confirmed: SettlementResult{State: SettlementConfirmed, PaymentOrderID: "ord_1", PaymentStatus: "PAID", CollectionStatus: "CONFIRMED", TransactionHash: "0xtx", Payer: "0xpayer", PaymentResponse: "response"},
+	}
+	orchestrator := PaymentOrchestrator{
+		Configs: runtimeConfigLoaderFunc(func(context.Context) (RuntimeConfig, error) { return orchestrationConfig(), nil }),
+		Orders:  orders,
+	}
+	result, err := orchestrator.Settle(context.Background(), httptest.NewRequest(http.MethodGet, "https://provider.example/research", nil), testPaymentRetry())
+	if err != nil || !result.Confirmed() || result.Settlement.PaymentResponse != "response" || orders.prepareCalls != 1 || orders.settleCalls != 0 || orders.confirmedCalls != 1 {
+		t.Fatalf("result=%+v prepare=%d settle=%d confirmed=%d err=%v", result, orders.prepareCalls, orders.settleCalls, orders.confirmedCalls, err)
 	}
 }
 

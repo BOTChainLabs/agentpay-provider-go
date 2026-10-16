@@ -68,6 +68,25 @@ func TestHTTPPaymentOrderClientTreatsUnknownAsPending(t *testing.T) {
 	}
 }
 
+func TestHTTPPaymentOrderClientLoadsConfirmedSettlementWithoutCallingSettle(t *testing.T) {
+	settlementHeaders := make(http.Header)
+	settlementHeaders.Set("PAYMENT-RESPONSE", "payment-response-base64")
+	client := httpClientFunc(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Path != "/v1/payment-orders/ord_1" || request.Header.Get("X-API-Key") != "ak_test" {
+			t.Fatalf("unexpected confirmed settlement request: %s %s headers=%v", request.Method, request.URL.Path, request.Header)
+		}
+		return orderHTTPResponse(http.StatusOK, settlementHeaders, `{"data":{"payment_order_id":"ord_1","payment_status":"PAID","collection_status":"CONFIRMED","tx_hash":"0xtx","payer_address":"0xpayer"}}`), nil
+	})
+	orders, err := NewHTTPPaymentOrderClient("https://agentpay.example", "ak_test", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settled, err := orders.LoadConfirmedSettlement(context.Background(), "ord_1")
+	if err != nil || settled.State != SettlementConfirmed || settled.PaymentResponse != "payment-response-base64" || settled.TransactionHash != "0xtx" || settled.Payer != "0xpayer" {
+		t.Fatalf("settled=%+v err=%v", settled, err)
+	}
+}
+
 func TestHTTPPaymentOrderClientFulfillmentLifecycle(t *testing.T) {
 	requestHash := strings.Repeat("a", 64)
 	resultHash := fulfillmentBodyHash([]byte(`{"ok":true}`))

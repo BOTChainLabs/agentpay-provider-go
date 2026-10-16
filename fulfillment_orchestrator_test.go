@@ -144,6 +144,38 @@ func TestFulfillmentOrchestratorNeverRunsExecutorBeforeConfirmed(t *testing.T) {
 	}
 }
 
+func TestFulfillmentOrchestratorExecutesPaidRetryWithoutSettlementLease(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "https://provider.example/research", nil)
+	binding, err := (RequestBinder{}).Bind(request, "svc_1", 7, "https://provider.example/research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders := &fakePaymentOrderClient{
+		prepared:  PreparedPaymentOrder{PaymentOrderID: "ord_1", ServiceID: "svc_1", ConfigVersion: 7, PaymentStatus: "PAID"},
+		confirmed: SettlementResult{State: SettlementConfirmed, PaymentOrderID: "ord_1", PaymentStatus: "PAID", CollectionStatus: "CONFIRMED", TransactionHash: "0xtx", Payer: "0xpayer", PaymentResponse: "response"},
+	}
+	fulfillment := &fakeFulfillmentClient{start: FulfillmentStartResult{
+		PaymentOrderID: "ord_1", PaymentIdentifier: "pay_1", InvocationID: "ord_1", Status: "RUNNING", AttemptCount: 1,
+		RequestHash: binding.RequestHash, LeaseToken: "lease_1", LeaseExpiresAt: time.Now().Add(time.Minute),
+	}}
+	orchestrator := FulfillmentOrchestrator{
+		Payments: PaymentOrchestrator{
+			Configs: runtimeConfigLoaderFunc(func(context.Context) (RuntimeConfig, error) { return orchestrationConfig(), nil }),
+			Orders:  orders,
+		},
+		Fulfillment:    fulfillment,
+		Results:        NewMemoryFulfillmentResultStore(),
+		ResultCacheKey: ResultCacheKeyBuilder{ProjectID: "proj_1"}.Build,
+	}
+	outcome, err := orchestrator.Execute(context.Background(), request, testPaymentRetry(), func(context.Context, FulfillmentInvocation, *http.Request) (FulfillmentResult, error) {
+		return FulfillmentResult{StatusCode: http.StatusOK, Body: []byte(`{"ok":true}`)}, nil
+	})
+	if err != nil || outcome.FulfillmentPending || outcome.Payment.Settlement.PaymentResponse != "response" || outcome.FulfillmentStatus != "SUCCEEDED" ||
+		orders.settleCalls != 0 || orders.confirmedCalls != 1 || strings.Join(fulfillment.events, ",") != "start,store,complete" {
+		t.Fatalf("outcome=%+v settle=%d confirmed=%d events=%v err=%v", outcome, orders.settleCalls, orders.confirmedCalls, fulfillment.events, err)
+	}
+}
+
 func TestMemoryFulfillmentResultStoreRejectsDifferentReplay(t *testing.T) {
 	store := NewMemoryFulfillmentResultStore()
 	key := "agentpay-result://proj_1/ord_1/response"

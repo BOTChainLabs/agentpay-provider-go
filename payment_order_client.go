@@ -21,6 +21,18 @@ type PaymentOrderClient interface {
 	Settle(context.Context, SettlePaymentOrderInput) (SettlementResult, error)
 }
 
+// ConfirmedSettlementReader is an optional extension to PaymentOrderClient. A
+// payment order can become PAID after the request that submitted :settle has
+// already returned PENDING. A later signed retry must not get another
+// settlement lease, but it still needs the original PAYMENT-RESPONSE before it
+// can safely deliver the protected resource.
+//
+// Keeping this as a separate interface avoids breaking custom PaymentOrderClient
+// test doubles and integrations that only implement Prepare and Settle.
+type ConfirmedSettlementReader interface {
+	LoadConfirmedSettlement(context.Context, string) (SettlementResult, error)
+}
+
 type PreparePaymentOrderInput struct {
 	ServiceID         string
 	ConfigVersion     int
@@ -192,6 +204,60 @@ func (c *HTTPPaymentOrderClient) Settle(ctx context.Context, input SettlePayment
 	default:
 		return SettlementResult{}, ErrPaymentOrderClientInvalid
 	}
+}
+
+// LoadConfirmedSettlement reads the immutable confirmed settlement fact for an
+// existing order. It is used only after Prepare reports PAID without issuing a
+// settlement lease; it never creates a new authorization or calls :settle.
+func (c *HTTPPaymentOrderClient) LoadConfirmedSettlement(ctx context.Context, paymentOrderID string) (SettlementResult, error) {
+	if c == nil || c.client == nil || c.settleBaseURL == "" || !validPaymentIdentifier(paymentOrderID) {
+		return SettlementResult{}, ErrPaymentOrderClientInvalid
+	}
+	endpoint, err := url.JoinPath(c.settleBaseURL, paymentOrderID)
+	if err != nil {
+		return SettlementResult{}, fmt.Errorf("%w: %v", ErrPaymentOrderClientInvalid, err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return SettlementResult{}, fmt.Errorf("%w: %v", ErrPaymentOrderClientInvalid, err)
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("X-API-Key", c.apiKey)
+	response, err := doWithoutRedirect(c.client, request)
+	if err != nil {
+		return SettlementResult{}, &SDKError{Code: CodeAgentPayUnavailable, Retryable: true, Cause: err}
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxPaymentOrderResponseBytes+1))
+	if err != nil || len(raw) > maxPaymentOrderResponseBytes {
+		return SettlementResult{}, &SDKError{Code: CodeAgentPayUnavailable, Retryable: true, Cause: err}
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return SettlementResult{}, mapOrderError(decodeOrderAPIError(response.StatusCode, raw), false)
+	}
+	var envelope struct {
+		Data struct {
+			PaymentOrderID   string `json:"payment_order_id"`
+			PaymentStatus    string `json:"payment_status"`
+			CollectionStatus string `json:"collection_status"`
+			TxHash           string `json:"tx_hash"`
+			PayerAddress     string `json:"payer_address"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Data.PaymentOrderID != paymentOrderID ||
+		envelope.Data.PaymentStatus != "PAID" || envelope.Data.CollectionStatus != "CONFIRMED" ||
+		strings.TrimSpace(envelope.Data.TxHash) == "" || strings.TrimSpace(envelope.Data.PayerAddress) == "" {
+		return SettlementResult{}, ErrPaymentOrderClientInvalid
+	}
+	paymentResponse := strings.TrimSpace(response.Header.Get("PAYMENT-RESPONSE"))
+	if paymentResponse == "" {
+		return SettlementResult{}, ErrPaymentOrderClientInvalid
+	}
+	return SettlementResult{
+		State: SettlementConfirmed, PaymentOrderID: envelope.Data.PaymentOrderID,
+		PaymentStatus: envelope.Data.PaymentStatus, CollectionStatus: envelope.Data.CollectionStatus,
+		TransactionHash: envelope.Data.TxHash, Payer: envelope.Data.PayerAddress, PaymentResponse: paymentResponse,
+	}, nil
 }
 
 func (c *HTTPPaymentOrderClient) post(ctx context.Context, endpoint, idempotencyKey string, body any, expectedStatus int, output any) error {
