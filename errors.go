@@ -10,6 +10,7 @@ const (
 	CodeServiceInactive           Code = "PAYMENT_SERVICE_INACTIVE"
 	CodeRuntimeConfigInvalid      Code = "RUNTIME_CONFIG_INVALID"
 	CodePaymentSignatureInvalid   Code = "INVALID_PAYMENT_SIGNATURE"
+	CodeAgentAuthMetadataInvalid  Code = "INVALID_AGENT_AUTH_METADATA"
 	CodePaymentProfileUnsupported Code = "UNSUPPORTED_PAYMENT_PROFILE"
 	CodePaymentPreparationFailed  Code = "PAYMENT_PREPARATION_FAILED"
 	CodeSettlementRejected        Code = "PAYMENT_SETTLEMENT_REJECTED"
@@ -43,6 +44,7 @@ var (
 	// ErrPaymentOrderClientInvalid 表示 B5.2 的 AgentPay HTTP 客户端参数或响应
 	// 不可信。它不是付款方可通过重试修复的链上错误。
 	ErrPaymentOrderClientInvalid = errors.New("支付订单客户端配置或响应无效")
+	ErrAgentAuthMetadataInvalid  = errors.New("AgentAuth 执行请求头不完整或无效")
 	// ErrPaymentRequestTooLarge 在计算请求指纹时触发。SDK 此时拒绝执行下游
 	// Handler，避免仅为支付而无上限地缓冲业务请求体。
 	ErrPaymentRequestTooLarge = errors.New("支付请求体超过 SDK 限制")
@@ -89,6 +91,8 @@ func classifyError(err error) *SDKError {
 		return &SDKError{Code: CodeRuntimeConfigInvalid, Retryable: false, Cause: err}
 	case errors.Is(err, ErrPaymentSignatureInvalid):
 		return &SDKError{Code: CodePaymentSignatureInvalid, Retryable: false, Cause: err}
+	case errors.Is(err, ErrAgentAuthMetadataInvalid):
+		return &SDKError{Code: CodeAgentAuthMetadataInvalid, Retryable: false, Cause: err}
 	case errors.Is(err, ErrPaymentProfileUnsupported):
 		return &SDKError{Code: CodePaymentProfileUnsupported, Retryable: false, Cause: err}
 	default:

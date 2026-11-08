@@ -79,7 +79,7 @@ func writeError(writer http.ResponseWriter, sdkErr *SDKError) {
 		switch sdkErr.Code {
 		case CodeServiceInactive:
 			status = http.StatusNotFound
-		case CodeRuntimeConfigInvalid, CodePaymentSignatureInvalid, CodePaymentProfileUnsupported:
+		case CodeRuntimeConfigInvalid, CodePaymentSignatureInvalid, CodePaymentProfileUnsupported, CodeAgentAuthMetadataInvalid:
 			status = http.StatusBadRequest
 		}
 	}
@@ -106,6 +106,8 @@ func errorMessage(code Code) string {
 		return "payment configuration is invalid"
 	case CodePaymentSignatureInvalid:
 		return "payment signature is invalid"
+	case CodeAgentAuthMetadataInvalid:
+		return "AgentAuth execution headers are incomplete or invalid"
 	case CodePaymentProfileUnsupported:
 		return "payment profile is unsupported"
 	default:

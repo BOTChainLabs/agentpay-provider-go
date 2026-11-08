@@ -5,9 +5,28 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 )
+
+const paymentExecutionHeader = "X-AgentAuth-Payment-Execution"
+const claimReceiptHeader = "X-AgentAuth-Claim-Receipt"
+
+func agentAuthFromRequest(r *http.Request) (*AgentAuthMetadata, error) {
+	executions, receipts := r.Header.Values(paymentExecutionHeader), r.Header.Values(claimReceiptHeader)
+	if len(executions) == 0 && len(receipts) == 0 {
+		return nil, nil // 未开启 Auth 的现有服务保持原流程。
+	}
+	if len(executions) != 1 || len(receipts) != 1 || strings.TrimSpace(executions[0]) == "" || strings.TrimSpace(receipts[0]) == "" || len(executions[0]) > 64 || len(receipts[0]) > 48<<10 {
+		return nil, ErrAgentAuthMetadataInvalid
+	}
+	metadata := &AgentAuthMetadata{PaymentExecutionID: executions[0], ClaimReceipt: receipts[0]}
+	if !validAgentAuth(metadata) {
+		return nil, ErrAgentAuthMetadataInvalid
+	}
+	return metadata, nil
+}
 
 // PaymentIdentifierResolver 允许 Provider 将自己的稳定业务调用标识传入订单。
 // 默认实现由规范化 PaymentPayload 推导，保证同一付款重试不会创建第二张订单。
@@ -38,6 +57,11 @@ func (o PaymentOrchestrator) Settle(ctx context.Context, request *http.Request, 
 	if o.Configs == nil || o.Orders == nil || request == nil || strings.TrimSpace(retry.RawHeader) == "" {
 		return PaymentOrchestrationResult{}, ErrPaymentOrderClientInvalid
 	}
+	agentAuth, err := agentAuthFromRequest(request)
+	if err != nil {
+		slog.WarnContext(ctx, "provider_agent_auth_headers_invalid", "reason", "missing_or_duplicate_header")
+		return PaymentOrchestrationResult{}, err
+	}
 	config, err := o.Configs.LoadRuntimeConfig(ctx)
 	if err != nil {
 		return PaymentOrchestrationResult{}, err
@@ -64,7 +88,7 @@ func (o PaymentOrchestrator) Settle(ctx context.Context, request *http.Request, 
 	}
 	prepared, err := o.Orders.Prepare(ctx, PreparePaymentOrderInput{
 		ServiceID: config.ServiceID, ConfigVersion: config.ConfigVersion, PaymentIdentifier: paymentIdentifier,
-		PaymentSignature: retry.RawHeader, Request: binding, IdempotencyKey: "prepare_" + fingerprint,
+		PaymentSignature: retry.RawHeader, Request: binding, IdempotencyKey: "prepare_" + fingerprint, AgentAuth: agentAuth,
 	})
 	if err != nil {
 		return PaymentOrchestrationResult{}, err
@@ -94,7 +118,7 @@ func (o PaymentOrchestrator) Settle(ctx context.Context, request *http.Request, 
 	}
 	settlement, err := o.Orders.Settle(ctx, SettlePaymentOrderInput{
 		PaymentOrderID: prepared.PaymentOrderID, SettlementLeaseToken: prepared.SettlementLeaseToken,
-		IdempotencyKey: settlementIdempotencyKey(prepared.PaymentOrderID),
+		IdempotencyKey: settlementIdempotencyKey(prepared.PaymentOrderID), AgentAuth: agentAuth,
 	})
 	if err != nil {
 		return PaymentOrchestrationResult{}, err
