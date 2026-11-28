@@ -40,6 +40,13 @@ type PreparePaymentOrderInput struct {
 	PaymentSignature  string
 	Request           RequestBinding
 	IdempotencyKey    string
+	AgentAuth         *AgentAuthMetadata
+}
+
+// AgentAuthMetadata 是 HTTP 旁路元数据，不改变 x402 付款签名内容。
+type AgentAuthMetadata struct {
+	PaymentExecutionID string `json:"payment_execution_id"`
+	ClaimReceipt       string `json:"claim_receipt"`
 }
 
 type PreparedPaymentOrder struct {
@@ -57,6 +64,7 @@ type SettlePaymentOrderInput struct {
 	PaymentOrderID       string
 	SettlementLeaseToken string
 	IdempotencyKey       string
+	AgentAuth            *AgentAuthMetadata
 }
 
 type SettlementState string
@@ -113,7 +121,7 @@ func NewHTTPPaymentOrderClient(baseURL, apiKey string, client HTTPClient) (*HTTP
 
 func (c *HTTPPaymentOrderClient) Prepare(ctx context.Context, input PreparePaymentOrderInput) (PreparedPaymentOrder, error) {
 	if c == nil || c.client == nil || c.prepareEndpoint == "" || !validOrderInput(input.ServiceID, input.ConfigVersion, input.PaymentIdentifier, input.PaymentSignature, input.IdempotencyKey) ||
-		input.Request.Method == "" || input.Request.ResourceURL == "" || len(input.Request.RequestHash) != 64 || input.Request.RequestHashVersion != requestHashVersionV1 {
+		input.Request.Method == "" || input.Request.ResourceURL == "" || len(input.Request.RequestHash) != 64 || input.Request.RequestHashVersion != requestHashVersionV1 || !validAgentAuth(input.AgentAuth) {
 		return PreparedPaymentOrder{}, ErrPaymentOrderClientInvalid
 	}
 	body := struct {
@@ -127,7 +135,8 @@ func (c *HTTPPaymentOrderClient) Prepare(ctx context.Context, input PreparePayme
 			RequestHash        string `json:"request_hash"`
 			RequestHashVersion string `json:"request_hash_version"`
 		} `json:"request"`
-	}{ServiceID: input.ServiceID, ConfigVersion: input.ConfigVersion, PaymentIdentifier: input.PaymentIdentifier, PaymentSignature: input.PaymentSignature}
+		AgentAuth *AgentAuthMetadata `json:"agent_auth,omitempty"`
+	}{ServiceID: input.ServiceID, ConfigVersion: input.ConfigVersion, PaymentIdentifier: input.PaymentIdentifier, PaymentSignature: input.PaymentSignature, AgentAuth: input.AgentAuth}
 	body.Request.Method = input.Request.Method
 	body.Request.ResourceURL = input.Request.ResourceURL
 	body.Request.RequestHash = input.Request.RequestHash
@@ -159,7 +168,7 @@ func (c *HTTPPaymentOrderClient) Prepare(ctx context.Context, input PreparePayme
 
 func (c *HTTPPaymentOrderClient) Settle(ctx context.Context, input SettlePaymentOrderInput) (SettlementResult, error) {
 	if c == nil || c.client == nil || c.settleBaseURL == "" || !validPaymentIdentifier(input.PaymentOrderID) ||
-		strings.TrimSpace(input.SettlementLeaseToken) == "" || !validIdempotencyKey(input.IdempotencyKey) {
+		strings.TrimSpace(input.SettlementLeaseToken) == "" || !validIdempotencyKey(input.IdempotencyKey) || !validAgentAuth(input.AgentAuth) {
 		return SettlementResult{}, ErrPaymentOrderClientInvalid
 	}
 	endpoint, err := url.JoinPath(c.settleBaseURL, input.PaymentOrderID+":settle")
@@ -167,8 +176,9 @@ func (c *HTTPPaymentOrderClient) Settle(ctx context.Context, input SettlePayment
 		return SettlementResult{}, fmt.Errorf("%w: %v", ErrPaymentOrderClientInvalid, err)
 	}
 	body := struct {
-		SettlementLeaseToken string `json:"settlement_lease_token"`
-	}{SettlementLeaseToken: input.SettlementLeaseToken}
+		SettlementLeaseToken string             `json:"settlement_lease_token"`
+		AgentAuth            *AgentAuthMetadata `json:"agent_auth,omitempty"`
+	}{SettlementLeaseToken: input.SettlementLeaseToken, AgentAuth: input.AgentAuth}
 	var output struct {
 		PaymentOrderID    string `json:"payment_order_id"`
 		PaymentStatus     string `json:"payment_status"`
@@ -204,6 +214,10 @@ func (c *HTTPPaymentOrderClient) Settle(ctx context.Context, input SettlePayment
 	default:
 		return SettlementResult{}, ErrPaymentOrderClientInvalid
 	}
+}
+
+func validAgentAuth(v *AgentAuthMetadata) bool {
+	return v == nil || (len(v.PaymentExecutionID) > 0 && len(v.PaymentExecutionID) <= 64 && strings.TrimSpace(v.PaymentExecutionID) == v.PaymentExecutionID && len(v.ClaimReceipt) > 0 && len(v.ClaimReceipt) <= 48<<10 && strings.TrimSpace(v.ClaimReceipt) == v.ClaimReceipt)
 }
 
 // LoadConfirmedSettlement reads the immutable confirmed settlement fact for an
